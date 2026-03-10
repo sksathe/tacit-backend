@@ -1,0 +1,28 @@
+{
+  "name": "tacit-server-api",
+  "version": "1.0.0",
+  "description": "Backend API for Tacit UI",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.81.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.1",
+    "resend": "^4.0.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.16.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3"
+  }
+}
