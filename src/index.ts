@@ -64,16 +64,14 @@ const uniqueAllowedOrigins = Array.from(new Set(allowedOrigins));
 
 const ngrokPatterns = ['.ngrok-free.dev', '.ngrok-free.app', '.ngrok.io'];
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (uniqueAllowedOrigins.includes(origin)) return callback(null, true);
-    if (CORS_ALLOW_NGROK && ngrokPatterns.some((p) => origin.includes(p))) return callback(null, true);
-    console.warn(`⚠️ CORS blocked origin: ${origin}`);
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-}));
+// TEMP FIX: loosen CORS to allow all origins (with credentials) while debugging Render config.
+// TODO: replace with strict origin list using FRONTEND_ORIGINS once deployment is stable.
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  }),
+);
 app.use(express.json());
 
 // Health check
