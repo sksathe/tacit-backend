@@ -129,3 +129,7 @@ export const UpdateMeetingSchema = z.object({
   scheduled_end_at: z.string().datetime().optional(),
   status: z.enum(['scheduled', 'in_progress', 'completed', 'cancelled']).optional(),
 });
+
+export const CreateWebMeetingSchema = CreateMeetingSchema.extend({
+  meeting_url: z.string().url(),
+});

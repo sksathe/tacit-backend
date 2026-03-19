@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>AI Agent</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: #000;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // Minimal AI Agent - Audio ONLY, no visuals
+      let wsOutput = null;
+      let audioQueue = [];
+      let isPlaying = false;
+
+      (async function () {
+        const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsHost = window.location.host;
+        wsOutput = new WebSocket(`${wsProtocol}//${wsHost}/agent-audio-out`);
+
+        wsOutput.onmessage = (event) => {
+          const message = JSON.parse(event.data);
+          if (message.type === "audio" && message.data) {
+            audioQueue.push(message.data);
+            playNext();
+          }
+        };
+      })();
+
+      async function playNext() {
+        if (isPlaying || audioQueue.length === 0) return;
+        isPlaying = true;
+
+        const base64Audio = audioQueue.shift();
+
+        try {
+          const binaryString = atob(base64Audio);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          if (ctx.state === "suspended") await ctx.resume();
+
+          // PCM 16kHz
+          const pcm = new Int16Array(bytes.buffer);
+          const buffer = ctx.createBuffer(1, pcm.length, 16000);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < pcm.length; i++) {
+            data[i] = pcm[i] / 32768.0;
+          }
+
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+
+          // Boost volume
+          const gain = ctx.createGain();
+          gain.gain.value = 3.0;
+          source.connect(gain);
+          gain.connect(ctx.destination);
+
+          source.onended = () => {
+            ctx.close();
+            isPlaying = false;
+            playNext();
+          };
+
+          source.start(0);
+        } catch (err) {
+          console.error("Playback error:", err);
+          isPlaying = false;
+          playNext();
+        }
+      }
+    </script>
+  </body>
+</html>
+

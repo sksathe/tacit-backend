@@ -28,6 +28,7 @@ export interface MeetingInviteEmailParams {
   agenda?: string;
   agentName?: string;
   agentCard?: AgentCardForEmail;
+  meetingUrl?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -50,6 +51,7 @@ function buildSessionScheduledHtml(params: {
   access_code: string;
   agenda_text: string;
   agent_card?: AgentCardForEmail;
+  meeting_url?: string;
 }): string {
   const {
     first_name,
@@ -62,8 +64,10 @@ function buildSessionScheduledHtml(params: {
     access_code,
     agenda_text,
     agent_card,
+    meeting_url,
   } = params;
   const f = escapeHtml;
+  const isWebMeeting = Boolean(meeting_url && meeting_url.trim());
 
   return `
 <!DOCTYPE html>
@@ -95,7 +99,7 @@ function buildSessionScheduledHtml(params: {
                 </tr>
                 <tr>
                   <td style="padding-top: 12px; text-align: center;">
-                    <p style="margin: 0; font-size: 14px; color: #86efac; font-weight: 500;">Hi ${f(first_name)}, your Tacit phone session is confirmed.</p>
+                    <p style="margin: 0; font-size: 14px; color: #86efac; font-weight: 500;">Hi ${f(first_name)}, your Tacit ${isWebMeeting ? 'web meeting' : 'phone session'} is confirmed.</p>
                   </td>
                 </tr>
               </table>
@@ -125,6 +129,16 @@ function buildSessionScheduledHtml(params: {
                     <span style="font-size: 14px; font-weight: 600; color: #bbf7d0;">${f(agent_name)}</span>
                   </td>
                 </tr>
+                ${
+                  isWebMeeting
+                    ? `
+                <tr>
+                  <td style="padding: 6px 0;">
+                    <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b;">Meeting Link</span><br>
+                    <a href="${f(meeting_url || '')}" style="font-size: 14px; font-weight: 600; color: #22c55e; text-decoration: none;">${f(meeting_url || '')}</a>
+                  </td>
+                </tr>`
+                    : `
                 <tr>
                   <td style="padding: 6px 0;">
                     <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b;">Call-in Number</span><br>
@@ -136,7 +150,8 @@ function buildSessionScheduledHtml(params: {
                     <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b;">Access Code</span><br>
                     <span style="font-size: 16px; font-weight: 700; color: #22c55e;">${f(access_code)}</span>
                   </td>
-                </tr>
+                </tr>`
+                }
               </table>
 ${agent_card ? `
               <!-- Agent card -->
@@ -161,9 +176,13 @@ ${agent_card ? `
 ` : ''}
 
               <p style="margin: 20px 0 6px; font-size: 15px; font-weight: 700; color: #bbf7d0;">How to join</p>
-              <p style="margin: 0 0 20px; font-size: 14px; color: #cbd5f5; line-height: 1.5;">Dial ${f(
-                twilio_number,
-              )}, say your name when prompted, then enter access code ${f(access_code)}.</p>
+              ${
+                isWebMeeting
+                  ? `<p style="margin: 0 0 20px; font-size: 14px; color: #cbd5f5; line-height: 1.5;">Click the meeting link above a few minutes before the scheduled time to join from your browser or meeting app.</p>`
+                  : `<p style="margin: 0 0 20px; font-size: 14px; color: #cbd5f5; line-height: 1.5;">Dial ${f(
+                      twilio_number,
+                    )}, say your name when prompted, then enter access code ${f(access_code)}.</p>`
+              }
 
               <p style="margin: 0 0 6px; font-size: 15px; font-weight: 700; color: #bbf7d0;">Agenda</p>
               <p style="margin: 0; font-size: 14px; color: #cbd5f5; line-height: 1.5;">${f(agenda_text)}</p>
@@ -189,7 +208,7 @@ export async function sendMeetingInviteEmail(params: MeetingInviteEmailParams): 
     return { ok: false, error: 'Email not configured (RESEND_API_KEY missing)' };
   }
 
-  const { inviteeName, inviteeEmail, meetingTitle, meetingCode, scheduledStartAt, scheduledEndAt, agenda, agentName, agentCard } = params;
+  const { inviteeName, inviteeEmail, meetingTitle, meetingCode, scheduledStartAt, scheduledEndAt, agenda, agentName, agentCard, meetingUrl } = params;
 
   const first_name = inviteeName.split(/\s+/)[0] || inviteeName;
   const start = new Date(scheduledStartAt);
@@ -197,6 +216,7 @@ export async function sendMeetingInviteEmail(params: MeetingInviteEmailParams): 
   const time_human = start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
   const agenda_text = agenda && agenda.trim() ? agenda.trim() : 'No agenda provided.';
+  const isWebMeeting = Boolean(meetingUrl && meetingUrl.trim());
 
   const html = buildSessionScheduledHtml({
     first_name,
@@ -209,9 +229,26 @@ export async function sendMeetingInviteEmail(params: MeetingInviteEmailParams): 
     access_code: meetingCode,
     agenda_text,
     agent_card: agentCard,
+    meeting_url: meetingUrl,
   });
 
-  const textBody = `
+  const textBody = isWebMeeting
+    ? `
+Hello ${inviteeName},
+
+Your web meeting is confirmed.
+
+When: ${date_human} at ${time_human} (${timezone})
+Session: ${meetingTitle}
+Meeting link: ${meetingUrl}
+
+How to join: Open the meeting link a few minutes before the scheduled time from your browser or meeting app.
+
+Agenda: ${agenda_text}
+
+— Tacit
+  `.trim()
+    : `
 Hello ${inviteeName},
 
 Your phone session is confirmed.
