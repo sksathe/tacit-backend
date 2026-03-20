@@ -56,13 +56,33 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 // POC lives either at repo root (older layout) or under `tacit-frontend/` (your current layout).
 const ROOT_PYTHON_POC_PATH = path.join(REPO_ROOT, "contract_revrec_poc");
 const FRONTEND_PYTHON_POC_PATH = path.join(REPO_ROOT, "tacit-frontend", "contract_revrec_poc");
-const PYTHON_POC_PATH = fsSync.existsSync(ROOT_PYTHON_POC_PATH) ? ROOT_PYTHON_POC_PATH : FRONTEND_PYTHON_POC_PATH;
+// Use whichever layout has the actual LLM parsing modules.
+const PYTHON_POC_PATH = fsSync.existsSync(path.join(ROOT_PYTHON_POC_PATH, "llm_parser.py"))
+  ? ROOT_PYTHON_POC_PATH
+  : FRONTEND_PYTHON_POC_PATH;
 const PYTHON_MAIN = path.join(PYTHON_POC_PATH, "main.py");
 
 const ParseContractJsonBodySchema = z.object({
   filename: z.string().optional(),
   text: z.string().min(1).optional(),
 });
+
+const ProcessLlmConfigSchema = z.object({
+  llmExtraInstructions: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() : undefined),
+    z.string().max(5000).optional(),
+  ),
+  schemaHintMode: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() : undefined),
+    z.enum(["default", "override"]).optional(),
+  ),
+  schemaHintOverride: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() : undefined),
+    z.string().max(20000).optional(),
+  ),
+});
+
+type ProcessLlmConfig = z.infer<typeof ProcessLlmConfigSchema>;
 
 type RevenueRecognitionMethod = "ratable" | "point_in_time";
 
@@ -382,7 +402,7 @@ router.post(
   },
 );
 
-async function runCanonicalPipeline(uploaded: Express.Multer.File) {
+async function runCanonicalPipeline(uploaded: Express.Multer.File, llmConfig?: { llmExtraInstructions?: string; schemaHintOverrideJson?: string }) {
   const jobId = randomUUID();
   const tmpRoot = path.join(os.tmpdir(), "tacit-contract-revrec-poc", jobId);
   const inputDir = path.join(tmpRoot, "input");
@@ -401,6 +421,8 @@ async function runCanonicalPipeline(uploaded: Express.Multer.File) {
     OPENAI_MODEL: process.env.OPENAI_MODEL,
     LLM_MAX_RETRIES: process.env.LLM_MAX_RETRIES,
     LLM_MAX_TEXT_CHARS: process.env.LLM_MAX_TEXT_CHARS,
+    LLM_EXTRA_INSTRUCTIONS: llmConfig?.llmExtraInstructions,
+    LLM_SCHEMA_HINT_OVERRIDE_JSON: llmConfig?.schemaHintOverrideJson,
   };
 
   const args = [
@@ -447,7 +469,38 @@ router.post("/extract-excel", upload.single("file"), async (req: Request, res: R
       return;
     }
 
-    const result = await runCanonicalPipeline(uploaded);
+    const parsedCfg = ProcessLlmConfigSchema.safeParse(req.body ?? {});
+    if (!parsedCfg.success) {
+      res.status(400).json({ error: "Invalid LLM config", details: parsedCfg.error.flatten() });
+      return;
+    }
+
+    const cfg = parsedCfg.data;
+    const schemaHintMode = cfg.schemaHintMode ?? "default";
+
+    let schemaHintOverrideJson: string | undefined;
+    if (schemaHintMode === "override") {
+      const rawOverride = cfg.schemaHintOverride;
+      if (!rawOverride) {
+        res.status(400).json({ error: "schemaHintOverride is required when schemaHintMode=override" });
+        return;
+      }
+      try {
+        const parsed = JSON.parse(rawOverride);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("schemaHintOverride must be a JSON object");
+        }
+        schemaHintOverrideJson = JSON.stringify(parsed);
+      } catch (e: any) {
+        res.status(400).json({ error: e?.message || "Invalid schemaHintOverride JSON" });
+        return;
+      }
+    }
+
+    const result = await runCanonicalPipeline(uploaded, {
+      llmExtraInstructions: cfg.llmExtraInstructions,
+      schemaHintOverrideJson,
+    });
 
     res.json({
       ok: true,
@@ -471,7 +524,38 @@ router.post("/process", upload.single("file"), async (req: Request, res: Respons
       return;
     }
 
-    const result = await runCanonicalPipeline(uploaded);
+    const parsedCfg = ProcessLlmConfigSchema.safeParse(req.body ?? {});
+    if (!parsedCfg.success) {
+      res.status(400).json({ error: "Invalid LLM config", details: parsedCfg.error.flatten() });
+      return;
+    }
+
+    const cfg = parsedCfg.data;
+    const schemaHintMode = cfg.schemaHintMode ?? "default";
+
+    let schemaHintOverrideJson: string | undefined;
+    if (schemaHintMode === "override") {
+      const rawOverride = cfg.schemaHintOverride;
+      if (!rawOverride) {
+        res.status(400).json({ error: "schemaHintOverride is required when schemaHintMode=override" });
+        return;
+      }
+      try {
+        const parsed = JSON.parse(rawOverride);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("schemaHintOverride must be a JSON object");
+        }
+        schemaHintOverrideJson = JSON.stringify(parsed);
+      } catch (e: any) {
+        res.status(400).json({ error: e?.message || "Invalid schemaHintOverride JSON" });
+        return;
+      }
+    }
+
+    const result = await runCanonicalPipeline(uploaded, {
+      llmExtraInstructions: cfg.llmExtraInstructions,
+      schemaHintOverrideJson,
+    });
 
     res.json({
       ok: true,
