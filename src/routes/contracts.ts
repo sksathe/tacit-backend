@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
-import pdfParse from "pdf-parse";
+import { PDFParse } from "pdf-parse";
 import mammoth from "mammoth";
 import { spawn } from "node:child_process";
 import os from "node:os";
@@ -348,8 +348,13 @@ async function extractTextFromUpload(file: Express.Multer.File): Promise<string>
     contentType.includes("officedocument.wordprocessingml.document") || filename.endsWith(".docx") || filename.endsWith(".doc");
 
   if (isPdf) {
-    const data = await pdfParse(file.buffer);
-    return String(data.text || "");
+    const parser = new PDFParse({ data: file.buffer });
+    try {
+      const parsed = await parser.getText();
+      return String(parsed.text || "");
+    } finally {
+      await parser.destroy().catch(() => undefined);
+    }
   }
 
   if (isDocx) {

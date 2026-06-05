@@ -37,6 +37,7 @@ import meetingsRouter from './routes/meetings.js';
 import sessionsRouter from './routes/sessions.js';
 import webMeetingsRouter from './routes/web-meetings.js';
 import contractsRouter from './routes/contracts.js';
+import manuRouter from './routes/manu.js';
 import { createServer } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { parse } from 'node:url';
@@ -111,6 +112,7 @@ app.use('/api/meetings', meetingsRouter);
 app.use('/api/sessions', sessionsRouter);
 app.use('/api/web-meetings', webMeetingsRouter);
 app.use('/api/contracts', contractsRouter);
+app.use('/api/manu', manuRouter);
 
 // --- Real-time audio relay (Recall.ai -> ElevenLabs -> agent-minimal.html) ---
 const connections = new Map<symbol, WebSocket | null>();
