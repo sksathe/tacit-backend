@@ -1,4 +1,3 @@
-# Contract RevRec POC — install at backend root for Render/deploy (see contract_revrec_poc/)
 openai>=1.30.0
 pydantic>=2.6.0
 python-dotenv>=1.0.1
