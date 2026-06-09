@@ -20,9 +20,35 @@ const upload = multer({
   },
 });
 
+function resolvePythonBin(): string {
+  const fromEnv = process.env.PYTHON_BIN?.trim();
+  if (fromEnv) return fromEnv;
+  return process.platform === "win32" ? "python" : "python3";
+}
+
+function resolveContractPocPath(): string {
+  const fromEnv = process.env.CONTRACT_REVREC_POC_PATH?.trim();
+  if (fromEnv) {
+    const resolved = path.resolve(fromEnv);
+    if (fsSync.existsSync(path.join(resolved, "llm_parser.py"))) return resolved;
+    throw new Error(`CONTRACT_REVREC_POC_PATH is set but llm_parser.py was not found: ${resolved}`);
+  }
+
+  // tacit-backend/contract_revrec_poc (works when frontend is deployed separately)
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const backendRoot = path.resolve(moduleDir, "..", "..");
+  const defaultPath = path.join(backendRoot, "contract_revrec_poc");
+  if (fsSync.existsSync(path.join(defaultPath, "llm_parser.py"))) return defaultPath;
+
+  throw new Error(
+    `Contract RevRec POC not found at ${defaultPath}. ` +
+      "Ensure contract_revrec_poc/ is deployed with the backend and run: pip install -r contract_revrec_poc/requirements.txt",
+  );
+}
+
 async function runPython(args: string[], opts: { cwd: string; env?: Record<string, string | undefined> }) {
   return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn("python", args, {
+    const child = spawn(resolvePythonBin(), args, {
       cwd: opts.cwd,
       env: {
         ...process.env,
@@ -49,17 +75,7 @@ async function runPython(args: string[], opts: { cwd: string; env?: Record<strin
   });
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
-
-// POC lives either at repo root (older layout) or under `tacit-frontend/` (your current layout).
-const ROOT_PYTHON_POC_PATH = path.join(REPO_ROOT, "contract_revrec_poc");
-const FRONTEND_PYTHON_POC_PATH = path.join(REPO_ROOT, "tacit-frontend", "contract_revrec_poc");
-// Use whichever layout has the actual LLM parsing modules.
-const PYTHON_POC_PATH = fsSync.existsSync(path.join(ROOT_PYTHON_POC_PATH, "llm_parser.py"))
-  ? ROOT_PYTHON_POC_PATH
-  : FRONTEND_PYTHON_POC_PATH;
+const PYTHON_POC_PATH = resolveContractPocPath();
 const PYTHON_MAIN = path.join(PYTHON_POC_PATH, "main.py");
 
 const ParseContractJsonBodySchema = z.object({

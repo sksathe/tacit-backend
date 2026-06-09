@@ -15,8 +15,29 @@ npm run dev
 - **Supabase**: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 - **Default project (flat access)**: `DEFAULT_PROJECT_ID` — UUID of the `Default` project created by `16_flat_access.sql` (optional; backend resolves by name if unset)
 - **CORS**: `FRONTEND_ORIGINS` (comma-separated), optional `CORS_ALLOW_NGROK`
+- **Contracts (Clara / RevRec POC)**: `OPENAI_API_KEY`, optional `OPENAI_MODEL`, `PYTHON_BIN` (default `python3` on Linux), `CONTRACT_REVREC_POC_PATH` (override POC folder)
 - **Email**: `RESEND_API_KEY`, optional `EMAIL_FROM`
 - **Telephony**: `TWILIO_NUMBER`
+
+### Contract RevRec POC (Python, ships with backend)
+
+The PDF → Excel pipeline lives in **`contract_revrec_poc/`** inside this repo. The frontend is deployed separately; it only calls `POST /api/contracts/process`.
+
+**One-time setup (local or on the server):**
+
+```bash
+pip install -r contract_revrec_poc/requirements.txt
+```
+
+**Deploy backend alone (e.g. Render root directory `tacit-backend`):**
+
+```bash
+npm install && npm run build
+pip install -r contract_revrec_poc/requirements.txt
+npm start
+```
+
+No `tacit-frontend` folder is required on the backend host.
 
 ### Flat access mode (demo)
 
