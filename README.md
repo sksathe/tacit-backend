@@ -29,13 +29,21 @@ The PDF → Excel pipeline lives in **`contract_revrec_poc/`** inside this repo.
 pip install -r contract_revrec_poc/requirements.txt
 ```
 
-**Deploy backend alone (e.g. Render root directory `tacit-backend`):**
+**Deploy backend alone (Render / Railway):**
+
+- Connect the **`tacit-backend` git repo** (not the monorepo parent).
+- **Root directory:** leave empty (`.` ) — the repo root must contain `package.json` and `requirements.txt`.
+- **Build command:**
 
 ```bash
-npm install && npm run build
-pip install -r contract_revrec_poc/requirements.txt
-npm start
+npm install && npm run build && pip install -r requirements.txt
 ```
+
+Or: `bash build.sh`
+
+- **Start command:** `npm start`
+
+Commit and push `contract_revrec_poc/` and root `requirements.txt` before deploying. If pip says the file is missing, the build is running from the wrong directory or those files were not pushed.
 
 No `tacit-frontend` folder is required on the backend host.
 

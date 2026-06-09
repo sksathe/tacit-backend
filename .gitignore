@@ -9,6 +9,10 @@ lerna-debug.log*
 
 node_modules
 dist
+__pycache__/
+*.pyc
+contract_revrec_poc/output/
+contract_revrec_poc/debug/
 dist-ssr
 *.local
 
