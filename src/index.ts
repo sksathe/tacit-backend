@@ -68,29 +68,20 @@ const devDefaultOrigins =
     ? []
     : ['http://localhost:8080', 'http://localhost:5173', 'http://localhost:3000'];
 
-const allowedOrigins = [...frontendOriginsFromEnv, ...devDefaultOrigins].filter(Boolean);
-const uniqueAllowedOrigins = Array.from(new Set(allowedOrigins));
+const legacyAllowedOrigins = ['https://tacit-frontend-d0zb.onrender.com'];
+const allowedOrigins = Array.from(
+  new Set([...frontendOriginsFromEnv, ...legacyAllowedOrigins, ...devDefaultOrigins].filter(Boolean)),
+);
 
 const ngrokPatterns = ['.ngrok-free.dev', '.ngrok-free.app', '.ngrok.io'];
-
-// TEMP FIX: allow only the deployed frontend origin (and localhost in dev).
-// TODO: revert to a configurable allowlist using FRONTEND_ORIGINS once stable.
-const TEMP_ALLOWED_ORIGINS = Array.from(
-  new Set([
-    'https://tacit-frontend-d0zb.onrender.com',
-    ...(NODE_ENV === 'production'
-      ? []
-      : ['http://localhost:8080', 'http://localhost:5173', 'http://localhost:3000']),
-  ]),
-);
 
 app.use(
   cors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       if (!origin) return callback(null, true);
-      if (TEMP_ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
       if (CORS_ALLOW_NGROK && ngrokPatterns.some((p) => origin.includes(p))) return callback(null, true);
-      console.warn(`⚠️ CORS blocked origin: ${origin}`);
+      console.warn(`⚠️ CORS blocked origin: ${origin} (allowed: ${allowedOrigins.join(', ') || 'none'})`);
       callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -301,5 +292,5 @@ server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) =>
 
 server.listen(PORT, () => {
   console.log(`Server API running on port ${PORT}`);
-  console.log(`Frontend origins: ${uniqueAllowedOrigins.join(', ')}`);
+  console.log(`Frontend origins: ${allowedOrigins.join(', ')}`);
 });
