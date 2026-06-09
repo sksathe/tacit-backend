@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { ensureDefaultMembership } from '../services/defaultProject.js';
 import { supabaseAnon, createAuthenticatedClient } from '../services/supabase.js';
 
 export interface AuthenticatedRequest extends Request {
@@ -32,6 +33,7 @@ export async function authMiddleware(
     req.userId = user.id;
     // Create authenticated client with JWT token for RLS
     req.supabaseClient = createAuthenticatedClient(token);
+    await ensureDefaultMembership(req.supabaseClient, user.id);
     console.log('✅ Authenticated user:', user.id, user.email);
     next();
   } catch (error) {

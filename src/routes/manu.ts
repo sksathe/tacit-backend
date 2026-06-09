@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
+import { resolveProjectId } from '../services/defaultProject.js';
 import { ingestUploadedFile } from '../services/manuIngest.js';
 import { buildTranslationQA } from '../services/manuLlm.js';
 import { buildManuRunFromInput, kickManuPipeline } from '../services/manuPipeline.js';
@@ -37,16 +38,8 @@ const TranslationQAGenerateSchema = z.object({
   ),
 });
 
-async function assertProjectAccess(req: AuthenticatedRequest, projectId: string): Promise<boolean> {
-  const { data, error } = await req.supabaseClient!
-    .from('project_members')
-    .select('project_id')
-    .eq('project_id', projectId)
-    .eq('user_id', req.userId!)
-    .maybeSingle();
-
-  if (error) throw error;
-  return Boolean(data);
+async function assertProjectAccess(req: AuthenticatedRequest, _projectId: string): Promise<boolean> {
+  return Boolean(req.userId);
 }
 
 async function getProjectOrgId(req: AuthenticatedRequest, projectId: string): Promise<string | null> {
@@ -92,19 +85,20 @@ router.post('/runs', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       return;
     }
 
-    const { projectId, missionId, mode, manualConfig, documents } = parsed.data;
-    if (!projectId) {
-      res.status(400).json({ ok: false, error: 'projectId is required for persisted runs' });
+    const { missionId, mode, manualConfig, documents } = parsed.data;
+    const resolvedProjectId = await resolveProjectId(req.supabaseClient!, parsed.data.projectId);
+    if (!resolvedProjectId) {
+      res.status(404).json({ ok: false, error: 'Default project not found. Run 16_flat_access.sql migration.' });
       return;
     }
 
-    const hasAccess = await assertProjectAccess(req, projectId);
+    const hasAccess = await assertProjectAccess(req, resolvedProjectId);
     if (!hasAccess) {
       res.status(403).json({ ok: false, error: 'Project access denied' });
       return;
     }
 
-    const orgId = await getProjectOrgId(req, projectId);
+    const orgId = await getProjectOrgId(req, resolvedProjectId);
     if (!orgId) {
       res.status(404).json({ ok: false, error: 'Project not found' });
       return;
@@ -114,7 +108,7 @@ router.post('/runs', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       .from('manu_runs')
       .insert({
         org_id: orgId,
-        project_id: projectId,
+        project_id: resolvedProjectId,
         created_by: req.userId,
         mission_id: missionId,
         mode,

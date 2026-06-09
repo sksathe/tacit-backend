@@ -109,7 +109,7 @@ export const CreateMeetingAgentSchema = z.object({
 });
 
 export const CreateMeetingSchema = z.object({
-  project_id: z.string().uuid(),
+  project_id: z.string().uuid().optional(),
   title: z.string().min(1),
   agenda: z.string().optional(),
   scheduled_start_at: z.string().datetime(),

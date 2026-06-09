@@ -5,6 +5,7 @@ import { CreateWebMeetingSchema } from "../types/index.js";
 import { generateMeetingCode, normalizeMeetingCode, normalizeName } from "../services/meeting-code.js";
 import { sendMeetingInviteEmail } from "../services/email.js";
 import { embedTacitMetaIntoAgenda } from "../services/meeting-meta.js";
+import { resolveProjectId } from "../services/defaultProject.js";
 
 const router = Router();
 
@@ -78,11 +79,17 @@ router.post("/", authMiddleware, async (req: AuthenticatedRequest, res: Response
     const body = CreateWebMeetingSchema.parse(req.body);
     const userId = req.userId!;
 
+    const projectId = await resolveProjectId(req.supabaseClient!, body.project_id);
+    if (!projectId) {
+      res.status(404).json({ error: "Default project not found. Run 16_flat_access.sql migration." });
+      return;
+    }
+
     // Get project to derive org_id
     const { data: project, error: projectError } = await req.supabaseClient!
       .from("projects")
       .select("org_id")
-      .eq("id", body.project_id)
+      .eq("id", projectId)
       .single();
 
     if (projectError || !project) {
@@ -105,7 +112,7 @@ router.post("/", authMiddleware, async (req: AuthenticatedRequest, res: Response
       .from("meetings")
       .insert({
         org_id: project.org_id,
-        project_id: body.project_id,
+        project_id: projectId,
         created_by: userId,
         title: body.title,
         agenda: agendaWithMeta,

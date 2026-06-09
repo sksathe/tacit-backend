@@ -1,11 +1,33 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
+import { resolveProjectId } from '../services/defaultProject.js';
 import { CreateMeetingSchema, UpdateMeetingSchema } from '../types/index.js';
 import { generateMeetingCode, normalizeMeetingCode, normalizeName } from '../services/meeting-code.js';
 import { sendMeetingInviteEmail } from '../services/email.js';
 
 const router = Router();
+
+// Get all meetings (flat access / demo)
+router.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { data, error } = await req.supabaseClient!
+      .from('meetings')
+      .select(`
+        *,
+        invitees:meeting_invitees(*),
+        call_sessions:call_sessions(*)
+      `)
+      .order('scheduled_start_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ meetings: data || [] });
+  } catch (error: any) {
+    console.error('Error fetching meetings:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch meetings' });
+  }
+});
 
 // Get all meetings for a project
 router.get('/project/:projectId', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -66,11 +88,17 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
     const body = CreateMeetingSchema.parse(req.body);
     const userId = req.userId!;
 
+    const projectId = await resolveProjectId(req.supabaseClient!, body.project_id);
+    if (!projectId) {
+      res.status(404).json({ error: 'Default project not found. Run 16_flat_access.sql migration.' });
+      return;
+    }
+
     // Get project to derive org_id
     const { data: project, error: projectError } = await req.supabaseClient!
       .from('projects')
       .select('org_id')
-      .eq('id', body.project_id)
+      .eq('id', projectId)
       .single();
 
     if (projectError || !project) {
@@ -87,7 +115,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       .from('meetings')
       .insert({
         org_id: project.org_id,
-        project_id: body.project_id,
+        project_id: projectId,
         created_by: userId,
         title: body.title,
         agenda: body.agenda || null,

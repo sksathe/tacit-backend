@@ -138,6 +138,28 @@ async function persistAutomationResult(params: {
   return data;
 }
 
+// Get all call sessions (flat access / demo)
+router.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { data, error } = await req.supabaseClient!
+      .from('call_sessions')
+      .select(`
+        *,
+        meeting:meetings(*),
+        transcript:transcripts(*),
+        summary:summaries(*)
+      `)
+      .order('started_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ sessions: data || [] });
+  } catch (error: any) {
+    console.error('Error fetching sessions:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch sessions' });
+  }
+});
+
 // Get all call sessions for a project
 router.get('/project/:projectId', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
