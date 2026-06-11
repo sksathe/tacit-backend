@@ -523,23 +523,92 @@ ${JSON.stringify(
   };
 }
 
+function getTranslationTargetSections(
+  missionId: string,
+  sections: ManuGeneratedSection[],
+): ManuGeneratedSection[] {
+  return missionId === MANU_MISSION_IDS.translationQa
+    ? sections.filter((s) =>
+        ['safety-warnings', 'intended-use', 'regulatory-compliance', 'operating-instructions'].includes(s.id),
+      )
+    : sections.filter((s) => s.required).slice(0, 6);
+}
+
+async function buildTranslationQAForLanguage(params: {
+  targetSections: ManuGeneratedSection[];
+  langCode: string;
+  translationDocs: ManuUploadedDocument[];
+  translationBundle: string;
+}): Promise<ManuTranslationQARow[]> {
+  const languageLabel = LANGUAGE_LABELS[params.langCode] || params.langCode;
+
+  const system = params.translationDocs.length
+    ? `You are MANU generating and validating translated manual sections for regulated equipment.
+For EACH English source section in the requested target language:
+1. Produce a complete, professional translatedText (regulation-ready IFU prose).
+2. If reference translation documents contain matching content, score accuracy against them (accuracyScore 0-1) and flag terminologyFlags / missingWarnings.
+3. If no reference exists for a section, still generate the translation and set accuracyScore to 0.92.
+
+Return JSON: { "rows": [{ "sectionId", "sectionTitle", "sourceText", "translatedText", "language", "accuracyScore": 0-1, "terminologyFlags": string[], "missingWarnings": string[] }] }
+One row per section. Set language to "${languageLabel}". Preserve safety warning hierarchy.`
+    : `You are MANU generating professional translated manual sections for regulated equipment.
+For EACH English source section, produce a complete translation in ${languageLabel}.
+
+Return JSON: { "rows": [{ "sectionId", "sectionTitle", "sourceText", "translatedText", "language", "accuracyScore": 0-1, "terminologyFlags": string[], "missingWarnings": string[] }] }
+Rules:
+- sourceText: the English source (use the full section content provided)
+- translatedText: complete professional translation in ${languageLabel} — do NOT leave empty
+- language: "${languageLabel}"
+- accuracyScore: your confidence in translation quality (0.85-0.98 typical for generated text)
+- terminologyFlags: note any terms requiring human review
+- missingWarnings: flag if safety warnings may not carry equivalent emphasis
+
+Produce exactly one row per section. Preserve warning/caution/regulatory terminology.`;
+
+  const userPayload = `Target language: ${languageLabel}
+
+English source sections:
+${JSON.stringify(
+  params.targetSections.map((s) => ({ id: s.id, title: s.title, content: s.content })),
+  null,
+  2,
+)}`;
+
+  const parsed = await callOpenAiJson<{ rows?: ManuTranslationQARow[] }>({
+    model: MANU_LLM_MODEL,
+    system,
+    user: params.translationDocs.length
+      ? `${userPayload}
+
+Reference translation documents (optional QA baseline):
+${params.translationBundle}`
+      : userPayload,
+    maxTokens: 4096,
+  });
+
+  return (Array.isArray(parsed.rows) ? parsed.rows : []).map((row) => ({
+    sectionId: row.sectionId || '',
+    sectionTitle: row.sectionTitle || '',
+    sourceText: row.sourceText || '',
+    translatedText: row.translatedText || '',
+    language: row.language || languageLabel,
+    accuracyScore: typeof row.accuracyScore === 'number' ? row.accuracyScore : 0.88,
+    terminologyFlags: Array.isArray(row.terminologyFlags) ? row.terminologyFlags : [],
+    missingWarnings: Array.isArray(row.missingWarnings) ? row.missingWarnings : [],
+    status: 'draft' as const,
+  }));
+}
+
 export async function buildTranslationQAFromDocuments(params: {
   sections: ManuGeneratedSection[];
   manualConfig: ManuManualConfig;
   missionId: string;
   documents: ManuUploadedDocument[];
+  langCodes?: string[];
 }): Promise<{ translationQA: ManuTranslationQARow[]; model: string }> {
-  const langCodes =
-    params.manualConfig.metadata.targetLanguages.length > 0
-      ? params.manualConfig.metadata.targetLanguages
-      : ['es', 'fr', 'de'];
+  const langCodes = params.langCodes ?? params.manualConfig.metadata.targetLanguages;
 
-  const targetSections =
-    params.missionId === MANU_MISSION_IDS.translationQa
-      ? params.sections.filter((s) =>
-          ['safety-warnings', 'intended-use', 'regulatory-compliance', 'operating-instructions'].includes(s.id),
-        )
-      : params.sections.filter((s) => s.required).slice(0, 6);
+  const targetSections = getTranslationTargetSections(params.missionId, params.sections);
 
   if (!targetSections.length || !langCodes.length) {
     return { translationQA: [], model: LLM_MODEL };
@@ -551,65 +620,18 @@ export async function buildTranslationQAFromDocuments(params: {
     10000,
   );
 
-  const languageList = langCodes.map((c) => LANGUAGE_LABELS[c] || c).join(', ');
+  const perLanguage = await Promise.all(
+    langCodes.map((langCode) =>
+      buildTranslationQAForLanguage({
+        targetSections,
+        langCode,
+        translationDocs,
+        translationBundle,
+      }),
+    ),
+  );
 
-  const system = translationDocs.length
-    ? `You are MANU generating and validating translated manual sections for regulated equipment.
-For EACH English source section and EACH target language:
-1. Produce a complete, professional translatedText in that language (regulation-ready IFU prose).
-2. If reference translation documents contain matching content, score accuracy against them (accuracyScore 0-1) and flag terminologyFlags / missingWarnings.
-3. If no reference exists for a section/language, still generate the translation and set accuracyScore to 0.92.
-
-Return JSON: { "rows": [{ "sectionId", "sectionTitle", "sourceText", "translatedText", "language", "accuracyScore": 0-1, "terminologyFlags": string[], "missingWarnings": string[] }] }
-One row per section per language. Use full language names in the language field (e.g. "Spanish"). Preserve safety warning hierarchy.`
-    : `You are MANU generating professional translated manual sections for regulated equipment.
-For EACH English source section, produce a complete translation in EVERY requested target language.
-
-Return JSON: { "rows": [{ "sectionId", "sectionTitle", "sourceText", "translatedText", "language", "accuracyScore": 0-1, "terminologyFlags": string[], "missingWarnings": string[] }] }
-Rules:
-- sourceText: the English source (use the full section content provided)
-- translatedText: complete professional translation in the target language — do NOT leave empty
-- language: full language name matching the target (Spanish, French, German, etc.)
-- accuracyScore: your confidence in translation quality (0.85-0.98 typical for generated text)
-- terminologyFlags: note any terms requiring human review
-- missingWarnings: flag if safety warnings may not carry equivalent emphasis
-
-Produce exactly one row per section per language. Preserve warning/caution/regulatory terminology.`;
-
-  const userPayload = `Target languages: ${languageList}
-
-English source sections:
-${JSON.stringify(
-  targetSections.map((s) => ({ id: s.id, title: s.title, content: s.content })),
-  null,
-  2,
-)}`;
-
-  const parsed = await callOpenAiJson<{ rows?: ManuTranslationQARow[] }>({
-    model: MANU_LLM_MODEL,
-    system,
-    user: translationDocs.length
-      ? `${userPayload}
-
-Reference translation documents (optional QA baseline):
-${translationBundle}`
-      : userPayload,
-    maxTokens: 8192,
-  });
-
-  const translationQA = (Array.isArray(parsed.rows) ? parsed.rows : []).map((row) => ({
-    sectionId: row.sectionId || '',
-    sectionTitle: row.sectionTitle || '',
-    sourceText: row.sourceText || '',
-    translatedText: row.translatedText || '',
-    language: row.language || '',
-    accuracyScore: typeof row.accuracyScore === 'number' ? row.accuracyScore : 0.88,
-    terminologyFlags: Array.isArray(row.terminologyFlags) ? row.terminologyFlags : [],
-    missingWarnings: Array.isArray(row.missingWarnings) ? row.missingWarnings : [],
-    status: 'draft' as const,
-  }));
-
-  return { translationQA, model: MANU_LLM_MODEL };
+  return { translationQA: perLanguage.flat(), model: MANU_LLM_MODEL };
 }
 
 export async function buildTranslationQA(params: {
@@ -617,11 +639,14 @@ export async function buildTranslationQA(params: {
   manualConfig: ManuManualConfig;
   missionId: string;
   documents?: ManuUploadedDocument[];
+  language?: string;
 }): Promise<{ translationQA: ManuTranslationQARow[]; model: string }> {
+  const langCodes = params.language ? [params.language] : params.manualConfig.metadata.targetLanguages;
   return buildTranslationQAFromDocuments({
     sections: params.sections,
     manualConfig: params.manualConfig,
     missionId: params.missionId,
     documents: params.documents ?? [],
+    langCodes,
   });
 }

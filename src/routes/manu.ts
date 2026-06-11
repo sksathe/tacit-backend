@@ -38,6 +38,7 @@ const TranslationQAGenerateSchema = z.object({
     }),
   ),
   documents: z.array(ManuUploadedDocumentSchema).optional(),
+  language: z.string().optional(),
 });
 
 async function assertProjectAccess(req: AuthenticatedRequest, _projectId: string): Promise<boolean> {
@@ -182,12 +183,13 @@ router.post('/translation-qa/generate', authMiddleware, async (req: Authenticate
       return;
     }
 
-    const { missionId, manualConfig, sections, documents } = parsed.data;
+    const { missionId, manualConfig, sections, documents, language } = parsed.data;
     const { translationQA, model } = await buildTranslationQA({
       missionId,
       manualConfig: manualConfig as any,
       sections: sections as any,
       documents: documents as any,
+      language,
     });
 
     res.json({ ok: true, translationQA, model });

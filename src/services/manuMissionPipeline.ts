@@ -358,13 +358,17 @@ async function runTranslationQaPipeline(
   });
   modelUsed = sectionModel;
 
-  const { translationQA, model: tqaModel } = await buildTranslationQAFromDocuments({
-    sections: generatedSections,
-    manualConfig,
-    missionId,
-    documents,
-  });
-  modelUsed = tqaModel;
+  let translationQA: ManuTranslationQARow[] = [];
+  if (manualConfig.metadata.targetLanguages.length > 0) {
+    const tqa = await buildTranslationQAFromDocuments({
+      sections: generatedSections,
+      manualConfig,
+      missionId,
+      documents,
+    });
+    translationQA = tqa.translationQA;
+    modelUsed = tqa.model;
+  }
 
   return {
     facts,
