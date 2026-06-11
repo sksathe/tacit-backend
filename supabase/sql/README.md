@@ -10,6 +10,8 @@ Run these migrations in order in your Supabase SQL Editor:
 6. `13_automation_results_rls.sql` - RLS policies for automation outputs
 7. `14_manu_runs.sql` - MANU workflow runs table
 8. `15_manu_runs_rls.sql` - RLS policies for MANU runs
+9. `18_mission_launches.sql` - Dashboard workspace launch history (per user)
+10. `19_mission_launches_rls.sql` - RLS policies for mission launches
 
 ### Flat access (demo — optional)
 

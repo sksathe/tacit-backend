@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { supabaseService } from './supabase.js';
 import {
   MANU_AGENT_ID,
@@ -9,14 +10,7 @@ import {
   type ManuUploadedDocument,
   type ManuManualConfig,
 } from '../types/manu.js';
-import {
-  extractManuFacts,
-  mapManuRisks,
-  generateManuSections,
-  buildManuCompliance,
-  buildTraceabilityMatrix,
-} from './manuLlm.js';
-import { randomUUID } from 'crypto';
+import { buildTraceabilityMatrix, runMissionPipeline } from './manuMissionPipeline.js';
 
 const ARTIFACTS_BUCKET = process.env.SUPABASE_ARTIFACTS_BUCKET || 'tacit-artifacts';
 
@@ -55,6 +49,58 @@ function defaultExportStatus(): Record<ManuExportKind, 'idle' | 'ready' | 'expor
   };
 }
 
+function assembleRun(params: {
+  runId: string;
+  missionId: string;
+  mode: 'discover' | 'execute';
+  documents: ManuUploadedDocument[];
+  manualConfig: ManuManualConfig;
+  pipeline: Awaited<ReturnType<typeof runMissionPipeline>>;
+  createdAt: string;
+}): ManuRun {
+  const { pipeline, documents, manualConfig, missionId, mode, runId, createdAt } = params;
+  const now = new Date().toISOString();
+  const traceabilityMatrix = buildTraceabilityMatrix(documents, pipeline.generatedSections);
+  const totalSections = pipeline.generatedSections.length;
+  const translationRequired = pipeline.translationQA.length;
+
+  return {
+    runId,
+    agentId: MANU_AGENT_ID,
+    missionId,
+    mode,
+    client: MANU_CLIENT,
+    uploadedDocuments: documents,
+    documentClassifications: Object.fromEntries(documents.map((d) => [d.id, d.category])),
+    extractedFacts: pipeline.facts,
+    manualConfig,
+    generatedSections: pipeline.generatedSections,
+    traceabilityMatrix,
+    riskCoverage: pipeline.riskCoverage,
+    regulatoryChecklist: pipeline.regulatoryChecklist,
+    approvalStatus: {
+      allRequiredApproved: false,
+      approvedCount: 0,
+      flaggedCount: 0,
+      requiredCount: totalSections,
+    },
+    translationQA: pipeline.translationQA,
+    translationApprovalStatus: translationRequired
+      ? {
+          allRequiredApproved: false,
+          approvedCount: 0,
+          flaggedCount: 0,
+          requiredCount: translationRequired,
+        }
+      : undefined,
+    exportStatus: defaultExportStatus(),
+    gaps: pipeline.gaps,
+    missionFocus: getMissionFocus(missionId),
+    createdAt,
+    updatedAt: now,
+  };
+}
+
 export async function runManuPipeline(runId: string, supabaseClient: any): Promise<void> {
   const { data: row, error: loadError } = await supabaseClient
     .from('manu_runs')
@@ -82,85 +128,30 @@ export async function runManuPipeline(runId: string, supabaseClient: any): Promi
       error_message: null,
     });
 
-    // Stage 0: documents already ingested at upload time
     await updateRun(supabaseClient, runId, {
       stage: MANU_PROCESSING_STAGES[1],
       stage_index: 1,
       progress: 20,
     });
 
-    const parallelStarted = Date.now();
-    const [{ facts, gaps, model: factsModel }, { riskCoverage }] = await Promise.all([
-      extractManuFacts({ documents, manualConfig, missionId }),
-      mapManuRisks({ documents, missionId }),
-    ]);
-    console.log(`[MANU][Timing] extractFacts_and_mapRisks_parallel_ms=${Date.now() - parallelStarted}`);
-    modelUsed = factsModel;
-
-    await updateRun(supabaseClient, runId, {
-      stage: MANU_PROCESSING_STAGES[3],
-      stage_index: 3,
-      progress: 55,
-    });
-
-    const { sections: generatedSections, model: sectionModel } = await generateManuSections({
-      documents,
-      manualConfig,
-      missionId,
-      extractedFacts: facts,
-    });
-    modelUsed = sectionModel;
+    const pipeline = await runMissionPipeline({ missionId, manualConfig, documents });
+    modelUsed = pipeline.modelUsed;
 
     await updateRun(supabaseClient, runId, {
       stage: MANU_PROCESSING_STAGES[4],
       stage_index: 4,
-      progress: 75,
+      progress: 85,
     });
 
-    const compliance = await buildManuCompliance({
-      documents,
-      manualConfig,
-      missionId,
-      sections: generatedSections,
-      gaps,
-    });
-
-    await updateRun(supabaseClient, runId, {
-      stage: MANU_PROCESSING_STAGES[5],
-      stage_index: 5,
-      progress: 90,
-    });
-
-    const traceabilityMatrix = buildTraceabilityMatrix(documents, compliance.sections);
-
-    const totalSections = compliance.sections.length;
-    const run: ManuRun = {
+    const run = assembleRun({
       runId,
-      agentId: MANU_AGENT_ID,
       missionId,
       mode,
-      client: MANU_CLIENT,
-      uploadedDocuments: documents,
-      documentClassifications: Object.fromEntries(documents.map((d) => [d.id, d.category])),
-      extractedFacts: facts,
+      documents,
       manualConfig,
-      generatedSections: compliance.sections,
-      traceabilityMatrix,
-      riskCoverage,
-      regulatoryChecklist: compliance.regulatoryChecklist,
-      approvalStatus: {
-        allRequiredApproved: false,
-        approvedCount: 0,
-        flaggedCount: 0,
-        requiredCount: totalSections,
-      },
-      translationQA: [],
-      exportStatus: defaultExportStatus(),
-      gaps: compliance.gaps,
-      missionFocus: getMissionFocus(missionId),
+      pipeline,
       createdAt: row.created_at || now,
-      updatedAt: now,
-    };
+    });
 
     const storagePath = await uploadResultArtifact(runId, run);
 
@@ -198,71 +189,26 @@ export async function buildManuRunFromInput(params: {
   documents: ManuUploadedDocument[];
   createdAt?: string;
 }): Promise<{ run: ManuRun; modelUsed: string }> {
-  const { missionId, mode, manualConfig, documents } = params;
   const pipelineStarted = Date.now();
   const runId = params.runId ?? `manu-${randomUUID()}`;
   const now = new Date().toISOString();
-  let modelUsed = process.env.MANU_LLM_MODEL || process.env.LLM_MODEL || 'gpt-4o-mini';
 
-  const parallelStarted = Date.now();
-  const [{ facts, gaps, model: factsModel }, { riskCoverage }] = await Promise.all([
-    extractManuFacts({ documents, manualConfig, missionId }),
-    mapManuRisks({ documents, missionId }),
-  ]);
-  console.log(`[MANU][Timing] extractFacts_and_mapRisks_parallel_ms=${Date.now() - parallelStarted}`);
-  modelUsed = factsModel;
-
-  const sectionStarted = Date.now();
-  const { sections: generatedSections, model: sectionModel } = await generateManuSections({
-    documents,
-    manualConfig,
-    missionId,
-    extractedFacts: facts,
+  const pipeline = await runMissionPipeline({
+    missionId: params.missionId,
+    manualConfig: params.manualConfig,
+    documents: params.documents,
   });
-  console.log(`[MANU][Timing] generateManuSections_ms=${Date.now() - sectionStarted}`);
-  modelUsed = sectionModel;
 
-  const complianceStarted = Date.now();
-  const compliance = await buildManuCompliance({
-    documents,
-    manualConfig,
-    missionId,
-    sections: generatedSections,
-    gaps,
-  });
-  console.log(`[MANU][Timing] buildManuCompliance_ms=${Date.now() - complianceStarted}`);
-
-  const traceabilityMatrix = buildTraceabilityMatrix(documents, compliance.sections);
-
-  const totalSections = compliance.sections.length;
-  const run: ManuRun = {
+  const run = assembleRun({
     runId,
-    agentId: MANU_AGENT_ID,
-    missionId,
-    mode,
-    client: MANU_CLIENT,
-    uploadedDocuments: documents,
-    documentClassifications: Object.fromEntries(documents.map((d) => [d.id, d.category])),
-    extractedFacts: facts,
-    manualConfig,
-    generatedSections: compliance.sections,
-    traceabilityMatrix,
-    riskCoverage,
-    regulatoryChecklist: compliance.regulatoryChecklist,
-    approvalStatus: {
-      allRequiredApproved: false,
-      approvedCount: 0,
-      flaggedCount: 0,
-      requiredCount: totalSections,
-    },
-    translationQA: [],
-    exportStatus: defaultExportStatus(),
-    gaps: compliance.gaps,
-    missionFocus: getMissionFocus(missionId),
+    missionId: params.missionId,
+    mode: params.mode,
+    documents: params.documents,
+    manualConfig: params.manualConfig,
+    pipeline,
     createdAt: params.createdAt || now,
-    updatedAt: now,
-  };
+  });
 
   console.log(`[MANU][Timing] buildManuRunFromInput_total_ms=${Date.now() - pipelineStarted}`);
-  return { run, modelUsed };
+  return { run, modelUsed: pipeline.modelUsed };
 }

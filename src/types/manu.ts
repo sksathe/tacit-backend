@@ -3,6 +3,17 @@ import { z } from 'zod';
 export const MANU_AGENT_ID = 'manu';
 export const MANU_CLIENT = 'LabCorp';
 
+/** Mission IDs aligned with frontend / labcorp/manu-agent-core.js */
+export const MANU_MISSION_IDS = {
+  productManualGen: 'product-manual-gen',
+  manualUpdate: 'manual-update',
+  riskCoverageQa: 'risk-coverage-qa',
+  regulatoryQa: 'regulatory-qa',
+  translationQa: 'translation-qa',
+} as const;
+
+export type ManuMissionId = (typeof MANU_MISSION_IDS)[keyof typeof MANU_MISSION_IDS];
+
 export const MANU_PROCESSING_STAGES = [
   'Reading source documents',
   'Extracting requirements and test evidence',

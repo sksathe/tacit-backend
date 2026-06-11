@@ -1,5 +1,6 @@
 import { config } from 'dotenv';
 import {
+  MANU_MISSION_IDS,
   MANU_SECTION_TITLES,
   type ManuExtractedFact,
   type ManuGeneratedSection,
@@ -96,23 +97,106 @@ function truncateBundle(text: string, max = 12000): string {
   return text.slice(0, max) + '\n…[bundle truncated for token limits]';
 }
 
+function getExistingManualText(documents: ManuUploadedDocument[]): string {
+  return documents
+    .filter((d) => d.category === 'existing_manual')
+    .map((d) => `--- ${d.fileName} ---\n${d.extractedText}`)
+    .join('\n\n');
+}
+
+function getTranslationDocuments(documents: ManuUploadedDocument[]): ManuUploadedDocument[] {
+  return documents.filter((d) => d.category === 'translation');
+}
+
+function missionFactsAddon(missionId: string): string {
+  switch (missionId) {
+    case MANU_MISSION_IDS.manualUpdate:
+      return 'Focus on CHANGES vs prior manual baseline. Flag new/changed/removed requirements.';
+    case MANU_MISSION_IDS.riskCoverageQa:
+      return 'Focus on hazards, mitigations, and whether manual warnings would cover each FMEA row.';
+    case MANU_MISSION_IDS.regulatoryQa:
+      return 'Focus on market-specific certifications, labeling, and post-market obligations.';
+    case MANU_MISSION_IDS.translationQa:
+      return 'Focus on English source statements that must be preserved in translations (warnings, intended use).';
+    default:
+      return 'Extract full product identity, specs, safety, and regulatory facts for a new manual draft.';
+  }
+}
+
+function missionSectionsAddon(missionId: string, existingManual: string): string {
+  switch (missionId) {
+    case MANU_MISSION_IDS.manualUpdate:
+      return `MISSION MODE: Manual Update & Revision.
+Compare new source evidence against the existing manual baseline below.
+Highlight changes, newly introduced risks, and compliance impacts in riskFlags/complianceFlags.
+Do NOT copy the old manual verbatim — synthesize an UPDATED section.
+
+Existing manual baseline:
+${existingManual || '[No existing manual uploaded — treat as new generation with revision note]'}`;
+    case MANU_MISSION_IDS.riskCoverageQa:
+      return `MISSION MODE: Risk-to-Manual Coverage QA.
+Primary goal: assess whether FMEA hazards are reflected in safety warnings and risk control language.
+Flag missing, weak, or ambiguous safety language in riskFlags. Keep sections concise and audit-ready.`;
+    case MANU_MISSION_IDS.regulatoryQa:
+      return `MISSION MODE: Regulatory Compliance QA.
+Primary goal: verify market-specific regulatory and certification requirements appear in manual sections.
+Emphasize complianceFlags. Do not assert certifications not supported by source documents.`;
+    case MANU_MISSION_IDS.translationQa:
+      return `MISSION MODE: Translation Accuracy QA — English source preparation.
+Generate authoritative English source sections from approved source documents.
+MANU will then generate professional translated manual sections in each configured target language.`;
+    default:
+      return 'MISSION MODE: Product Manual Generation — full traceable manual draft from source bundle.';
+  }
+}
+
 function hasCategory(docs: ManuUploadedDocument[], cat: string) {
   return docs.some((d) => d.category === cat);
 }
 
 function buildStaticGaps(docs: ManuUploadedDocument[], missionId: string): string[] {
   const gaps: string[] = [];
-  if (!hasCategory(docs, 'fmea')) gaps.push('No FMEA — risk-to-warning mapping limited');
-  if (!hasCategory(docs, 'regulatory')) gaps.push('No regulatory notes — compliance checklist incomplete');
-  if (!hasCategory(docs, 'engineering_test')) gaps.push('No engineering report — technical specs may be incomplete');
-  if (!hasCategory(docs, 'prd')) gaps.push('No PRD — intended use requires verification');
-  if (!hasCategory(docs, 'existing_manual')) gaps.push('No existing manual — treated as new manual generation');
-  if (missionId === 'manual-update' && !hasCategory(docs, 'existing_manual')) {
-    gaps.push('No existing manual uploaded — running as new manual generation with revision baseline');
+
+  switch (missionId) {
+    case MANU_MISSION_IDS.translationQa: {
+      if (!hasCategory(docs, 'existing_manual') && !hasCategory(docs, 'prd')) {
+        gaps.push('No English source manual or PRD — English sections will be generated from available evidence');
+      }
+      if (hasCategory(docs, 'translation')) {
+        gaps.push('Reference translation files uploaded — generated translations will be scored against these where available');
+      }
+      break;
+    }
+    case MANU_MISSION_IDS.riskCoverageQa: {
+      if (!hasCategory(docs, 'fmea')) {
+        gaps.push('No FMEA — risk coverage QA requires a risk assessment document');
+      }
+      break;
+    }
+    case MANU_MISSION_IDS.regulatoryQa: {
+      if (!hasCategory(docs, 'regulatory')) {
+        gaps.push('No regulatory notes — compliance checklist incomplete');
+      }
+      break;
+    }
+    case MANU_MISSION_IDS.manualUpdate: {
+      if (!hasCategory(docs, 'existing_manual')) {
+        gaps.push('No existing manual uploaded — running as new manual generation with revision baseline');
+      }
+      if (!hasCategory(docs, 'fmea')) gaps.push('No FMEA — risk-to-warning mapping limited');
+      if (!hasCategory(docs, 'regulatory')) gaps.push('No regulatory notes — compliance checklist incomplete');
+      break;
+    }
+    default: {
+      if (!hasCategory(docs, 'fmea')) gaps.push('No FMEA — risk-to-warning mapping limited');
+      if (!hasCategory(docs, 'regulatory')) gaps.push('No regulatory notes — compliance checklist incomplete');
+      if (!hasCategory(docs, 'engineering_test')) gaps.push('No engineering report — technical specs may be incomplete');
+      if (!hasCategory(docs, 'prd')) gaps.push('No PRD — intended use requires verification');
+      if (!hasCategory(docs, 'existing_manual')) gaps.push('No existing manual — treated as new manual generation');
+      break;
+    }
   }
-  if (missionId === 'translation-qa' && !hasCategory(docs, 'translation')) {
-    gaps.push('No translation files uploaded — translation QA will use simulated translated content');
-  }
+
   return gaps;
 }
 
@@ -128,7 +212,8 @@ export async function extractManuFacts(params: {
   const system = `You are MANU, a regulated equipment manual intelligence agent for LabCorp.
 Extract structured facts ONLY from the provided source documents. Do not invent specifications, certifications, or performance claims.
 Return JSON: { "facts": [{ "id", "group", "label", "value", "sourceDocumentIds": string[], "confidence": 0-1, "uncertain": boolean }], "gaps": string[] }
-Use sourceDocumentIds that match document ids from the bundle. Mark uncertain:true when evidence is thin.`;
+Use sourceDocumentIds that match document ids from the bundle. Mark uncertain:true when evidence is thin.
+Mission-specific guidance: ${missionFactsAddon(params.missionId)}`;
 
   const user = `Mission: ${params.missionId}
 Product: ${meta.productName} / ${meta.modelCode}
@@ -140,7 +225,8 @@ ${JSON.stringify(params.documents.map((d) => ({ id: d.id, fileName: d.fileName, 
 Bundle text:
 ${bundle}
 
-Known static gaps to include if still applicable: ${staticGaps.join('; ') || 'none'}`;
+Known static gaps to include if still applicable: ${staticGaps.join('; ') || 'none'}
+${params.missionId === MANU_MISSION_IDS.translationQa ? 'Only report gaps about English source documents — do not mention FMEA or regulatory documents unless critical to intended use.' : ''}`;
 
   const parsed = await callOpenAiJson<{ facts?: ManuExtractedFact[]; gaps?: string[] }>({
     model: LLM_MODEL,
@@ -157,22 +243,38 @@ Known static gaps to include if still applicable: ${staticGaps.join('; ') || 'no
 export async function mapManuRisks(params: {
   documents: ManuUploadedDocument[];
   missionId: string;
-}): Promise<{ riskCoverage: ManuRiskMapping[]; model: string }> {
-  if (!hasCategory(params.documents, 'fmea')) {
-    return { riskCoverage: [], model: LLM_MODEL };
+  includeCoverageReport?: boolean;
+}): Promise<{ riskCoverage: ManuRiskMapping[]; coverageReport: string; model: string }> {
+  const isRiskMission = params.missionId === MANU_MISSION_IDS.riskCoverageQa;
+  const fmeaDocs = params.documents.filter((d) => d.category === 'fmea');
+
+  if (!fmeaDocs.length && !isRiskMission) {
+    return { riskCoverage: [], coverageReport: '', model: LLM_MODEL };
   }
 
-  const fmeaDocs = params.documents.filter((d) => d.category === 'fmea');
-  const bundle = truncateBundle(fmeaDocs.map((d) => d.extractedText).join('\n\n'), 8000);
+  const bundle = truncateBundle(
+    fmeaDocs.length
+      ? fmeaDocs.map((d) => d.extractedText).join('\n\n')
+      : buildDocumentBundleSummary(params.documents),
+    8000,
+  );
 
-  const system = `You are a medical device risk analyst. Map FMEA hazards to manual warnings.
+  const system = params.includeCoverageReport
+    ? `You are a medical device risk analyst performing Risk-to-Manual Coverage QA.
+Return JSON: {
+  "riskCoverage": [{ "id", "hazard", "cause", "effect", "mitigation", "manualWarning", "coverageStatus": "covered"|"missing"|"needs_review" }],
+  "coverageReport": "Markdown summary of missing warnings, weak language, and traceability gaps"
+}
+Ground every row in source text. coverageStatus "missing" when no adequate manual warning exists.`
+    : `You are a medical device risk analyst. Map FMEA hazards to manual warnings.
 Return JSON: { "riskCoverage": [{ "id", "hazard", "cause", "effect", "mitigation", "manualWarning", "coverageStatus": "covered"|"missing"|"needs_review" }] }
 Ground every row in the FMEA text. Do not invent hazards.`;
 
-  const parsed = await callOpenAiJson<{ riskCoverage?: ManuRiskMapping[] }>({
+  const parsed = await callOpenAiJson<{ riskCoverage?: ManuRiskMapping[]; coverageReport?: string }>({
     model: LLM_MODEL,
     system,
-    user: `Mission: ${params.missionId}\n\nFMEA content:\n${bundle}`,
+    user: `Mission: ${params.missionId}\n\nRisk / FMEA content:\n${bundle}`,
+    maxTokens: params.includeCoverageReport ? 4096 : 2048,
   });
 
   const riskCoverage = (Array.isArray(parsed.riskCoverage) ? parsed.riskCoverage : []).map((r, i) => ({
@@ -185,7 +287,11 @@ Ground every row in the FMEA text. Do not invent hazards.`;
     coverageStatus: r.coverageStatus || 'needs_review',
   }));
 
-  return { riskCoverage, model: LLM_MODEL };
+  return {
+    riskCoverage,
+    coverageReport: parsed.coverageReport || '',
+    model: LLM_MODEL,
+  };
 }
 
 export async function generateManuSections(params: {
@@ -201,10 +307,14 @@ export async function generateManuSections(params: {
     required: MANU_SECTION_TITLES[id]?.required ?? false,
   }));
 
+  const existingManual = truncateBundle(getExistingManualText(params.documents), 6000);
+
   const system = `You are MANU generating regulated equipment manual sections for LabCorp.
 CRITICAL: Only use information from source documents and extracted facts. Cite sourceDocumentIds in sourceReferences.
 Return JSON: { "sections": [{ "id", "title", "content", "confidence": 0-1, "sourceReferences": [{ "documentId", "documentName", "category", "excerpt" }], "relatedDocumentIds": string[], "riskFlags": string[], "complianceFlags": string[], "required": boolean }] }
-Write professional manual prose. Flag missing FMEA/regulatory evidence in riskFlags/complianceFlags.`;
+Write professional manual prose. Flag missing FMEA/regulatory evidence in riskFlags/complianceFlags.
+
+${missionSectionsAddon(params.missionId, existingManual)}`;
 
   const user = `Mission: ${params.missionId}
 Template: ${params.manualConfig.metadata.templateType}
@@ -264,7 +374,12 @@ export async function buildManuCompliance(params: {
     8000,
   );
 
-  const system = `You are a regulatory compliance reviewer for LabCorp equipment manuals.
+  const system =
+    params.missionId === MANU_MISSION_IDS.regulatoryQa
+      ? `You are a regulatory compliance QA reviewer for LabCorp equipment manuals.
+Return JSON: { "regulatoryChecklist": [{ "id", "market", "standard", "certificationStatus", "requiredStatement", "missingInfo" }], "sectionUpdates": [{ "id", "complianceFlags": string[] }], "additionalGaps": string[] }
+Primary task: identify market-specific gaps, missing certifications, and labeling obligations. Be strict — only assert evidence present in sources.`
+      : `You are a regulatory compliance reviewer for LabCorp equipment manuals.
 Return JSON: { "regulatoryChecklist": [{ "id", "market", "standard", "certificationStatus", "requiredStatement", "missingInfo" }], "sectionUpdates": [{ "id", "complianceFlags": string[] }], "additionalGaps": string[] }
 Only assert certifications present in source documents. Mark missingInfo when evidence is absent.`;
 
@@ -353,10 +468,66 @@ const LANGUAGE_LABELS: Record<string, string> = {
   ja: 'Japanese',
 };
 
-export async function buildTranslationQA(params: {
+export async function generateManualRevisionDelta(params: {
+  documents: ManuUploadedDocument[];
+  manualConfig: ManuManualConfig;
+  missionId: string;
+  generatedSections: ManuGeneratedSection[];
+}): Promise<{
+  changeLog: string;
+  redlineSummary: string;
+  additionalGaps: string[];
+  model: string;
+}> {
+  const existingManual = truncateBundle(getExistingManualText(params.documents), 8000);
+  const newBundle = truncateBundle(buildDocumentBundleSummary(params.documents), 6000);
+
+  const system = `You are MANU performing a manual update & revision analysis for LabCorp.
+Compare the existing manual baseline against new source documents and generated draft sections.
+Return JSON: {
+  "changeLog": "Bullet list of substantive changes (requirements, risks, specs, regulatory)",
+  "redlineSummary": "Markdown table or list: Section | Change type (added/modified/removed) | Impact",
+  "additionalGaps": string[]
+}
+Do not invent changes — only report differences supported by evidence.`;
+
+  const parsed = await callOpenAiJson<{
+    changeLog?: string;
+    redlineSummary?: string;
+    additionalGaps?: string[];
+  }>({
+    model: LLM_MODEL,
+    system,
+    user: `Product: ${params.manualConfig.metadata.productName} (${params.manualConfig.metadata.modelCode})
+
+Existing manual:
+${existingManual || '[none uploaded]'}
+
+New source bundle excerpt:
+${newBundle}
+
+Generated section summaries:
+${JSON.stringify(
+  params.generatedSections.map((s) => ({ id: s.id, title: s.title, excerpt: s.content.slice(0, 200) })),
+  null,
+  2,
+)}`,
+    maxTokens: 3072,
+  });
+
+  return {
+    changeLog: parsed.changeLog || '',
+    redlineSummary: parsed.redlineSummary || '',
+    additionalGaps: Array.isArray(parsed.additionalGaps) ? parsed.additionalGaps : [],
+    model: LLM_MODEL,
+  };
+}
+
+export async function buildTranslationQAFromDocuments(params: {
   sections: ManuGeneratedSection[];
   manualConfig: ManuManualConfig;
   missionId: string;
+  documents: ManuUploadedDocument[];
 }): Promise<{ translationQA: ManuTranslationQARow[]; model: string }> {
   const langCodes =
     params.manualConfig.metadata.targetLanguages.length > 0
@@ -364,39 +535,93 @@ export async function buildTranslationQA(params: {
       : ['es', 'fr', 'de'];
 
   const targetSections =
-    params.missionId === 'translation-qa'
+    params.missionId === MANU_MISSION_IDS.translationQa
       ? params.sections.filter((s) =>
           ['safety-warnings', 'intended-use', 'regulatory-compliance', 'operating-instructions'].includes(s.id),
         )
       : params.sections.filter((s) => s.required).slice(0, 6);
 
-  if (!targetSections.length) {
+  if (!targetSections.length || !langCodes.length) {
     return { translationQA: [], model: LLM_MODEL };
   }
 
-  const system = `You simulate translation QA for regulated manuals.
+  const translationDocs = getTranslationDocuments(params.documents);
+  const translationBundle = truncateBundle(
+    translationDocs.map((d) => `--- ${d.fileName} (${d.id}) ---\n${d.extractedText}`).join('\n\n'),
+    10000,
+  );
+
+  const languageList = langCodes.map((c) => LANGUAGE_LABELS[c] || c).join(', ');
+
+  const system = translationDocs.length
+    ? `You are MANU generating and validating translated manual sections for regulated equipment.
+For EACH English source section and EACH target language:
+1. Produce a complete, professional translatedText in that language (regulation-ready IFU prose).
+2. If reference translation documents contain matching content, score accuracy against them (accuracyScore 0-1) and flag terminologyFlags / missingWarnings.
+3. If no reference exists for a section/language, still generate the translation and set accuracyScore to 0.92.
+
 Return JSON: { "rows": [{ "sectionId", "sectionTitle", "sourceText", "translatedText", "language", "accuracyScore": 0-1, "terminologyFlags": string[], "missingWarnings": string[] }] }
-Produce one row per section per language. Use professional localized phrasing grounded in sourceText.`;
+One row per section per language. Use full language names in the language field (e.g. "Spanish"). Preserve safety warning hierarchy.`
+    : `You are MANU generating professional translated manual sections for regulated equipment.
+For EACH English source section, produce a complete translation in EVERY requested target language.
 
-  try {
-    const parsed = await callOpenAiJson<{ rows?: ManuTranslationQARow[] }>({
-      model: LLM_MODEL,
-      system,
-      user: `Languages: ${langCodes.map((c) => LANGUAGE_LABELS[c] || c).join(', ')}
+Return JSON: { "rows": [{ "sectionId", "sectionTitle", "sourceText", "translatedText", "language", "accuracyScore": 0-1, "terminologyFlags": string[], "missingWarnings": string[] }] }
+Rules:
+- sourceText: the English source (use the full section content provided)
+- translatedText: complete professional translation in the target language — do NOT leave empty
+- language: full language name matching the target (Spanish, French, German, etc.)
+- accuracyScore: your confidence in translation quality (0.85-0.98 typical for generated text)
+- terminologyFlags: note any terms requiring human review
+- missingWarnings: flag if safety warnings may not carry equivalent emphasis
 
-Sections:
+Produce exactly one row per section per language. Preserve warning/caution/regulatory terminology.`;
+
+  const userPayload = `Target languages: ${languageList}
+
+English source sections:
 ${JSON.stringify(
-  targetSections.slice(0, 4).map((s) => ({ id: s.id, title: s.title, content: s.content.slice(0, 280) })),
+  targetSections.map((s) => ({ id: s.id, title: s.title, content: s.content })),
   null,
   2,
-)}`,
-      maxTokens: 4096,
-    });
+)}`;
 
-    const translationQA = Array.isArray(parsed.rows) ? parsed.rows : [];
-    return { translationQA, model: LLM_MODEL };
-  } catch (err) {
-    console.warn('MANU translation QA generation failed; continuing with empty rows:', err);
-    return { translationQA: [], model: LLM_MODEL };
-  }
+  const parsed = await callOpenAiJson<{ rows?: ManuTranslationQARow[] }>({
+    model: MANU_LLM_MODEL,
+    system,
+    user: translationDocs.length
+      ? `${userPayload}
+
+Reference translation documents (optional QA baseline):
+${translationBundle}`
+      : userPayload,
+    maxTokens: 8192,
+  });
+
+  const translationQA = (Array.isArray(parsed.rows) ? parsed.rows : []).map((row) => ({
+    sectionId: row.sectionId || '',
+    sectionTitle: row.sectionTitle || '',
+    sourceText: row.sourceText || '',
+    translatedText: row.translatedText || '',
+    language: row.language || '',
+    accuracyScore: typeof row.accuracyScore === 'number' ? row.accuracyScore : 0.88,
+    terminologyFlags: Array.isArray(row.terminologyFlags) ? row.terminologyFlags : [],
+    missingWarnings: Array.isArray(row.missingWarnings) ? row.missingWarnings : [],
+    status: 'draft' as const,
+  }));
+
+  return { translationQA, model: MANU_LLM_MODEL };
+}
+
+export async function buildTranslationQA(params: {
+  sections: ManuGeneratedSection[];
+  manualConfig: ManuManualConfig;
+  missionId: string;
+  documents?: ManuUploadedDocument[];
+}): Promise<{ translationQA: ManuTranslationQARow[]; model: string }> {
+  return buildTranslationQAFromDocuments({
+    sections: params.sections,
+    manualConfig: params.manualConfig,
+    missionId: params.missionId,
+    documents: params.documents ?? [],
+  });
 }

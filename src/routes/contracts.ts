@@ -31,7 +31,9 @@ function resolveContractPocPath(): string {
   if (fromEnv) {
     const resolved = path.resolve(fromEnv);
     if (fsSync.existsSync(path.join(resolved, "llm_parser.py"))) return resolved;
-    throw new Error(`CONTRACT_REVREC_POC_PATH is set but llm_parser.py was not found: ${resolved}`);
+    console.warn(
+      `[contracts] CONTRACT_REVREC_POC_PATH is set but llm_parser.py was not found at ${resolved}; using default folder`,
+    );
   }
 
   // tacit-backend/contract_revrec_poc (works when frontend is deployed separately)
@@ -44,6 +46,17 @@ function resolveContractPocPath(): string {
     `Contract RevRec POC not found at ${defaultPath}. ` +
       "Ensure contract_revrec_poc/ is deployed with the backend and run: pip install -r contract_revrec_poc/requirements.txt",
   );
+}
+
+let cachedPythonPocPath: string | undefined;
+
+function getPythonPocPath(): string {
+  if (!cachedPythonPocPath) cachedPythonPocPath = resolveContractPocPath();
+  return cachedPythonPocPath;
+}
+
+function getPythonMain(): string {
+  return path.join(getPythonPocPath(), "main.py");
 }
 
 async function runPython(args: string[], opts: { cwd: string; env?: Record<string, string | undefined> }) {
@@ -74,9 +87,6 @@ async function runPython(args: string[], opts: { cwd: string; env?: Record<strin
     });
   });
 }
-
-const PYTHON_POC_PATH = resolveContractPocPath();
-const PYTHON_MAIN = path.join(PYTHON_POC_PATH, "main.py");
 
 const ParseContractJsonBodySchema = z.object({
   filename: z.string().optional(),
@@ -447,7 +457,7 @@ async function runCanonicalPipeline(uploaded: Express.Multer.File, llmConfig?: {
   };
 
   const args = [
-    PYTHON_MAIN,
+    getPythonMain(),
     "--input",
     inputPdfPath,
     "--out-dir",
@@ -456,11 +466,11 @@ async function runCanonicalPipeline(uploaded: Express.Multer.File, llmConfig?: {
     debugDir,
   ];
 
-  if (!fsSync.existsSync(PYTHON_MAIN)) {
-    throw new Error(`Contract POC Python entrypoint not found: ${PYTHON_MAIN}`);
+  if (!fsSync.existsSync(getPythonMain())) {
+    throw new Error(`Contract POC Python entrypoint not found: ${getPythonMain()}`);
   }
 
-  const { stdout, stderr } = await runPython(args, { cwd: PYTHON_POC_PATH, env: pyEnv });
+  const { stdout, stderr } = await runPython(args, { cwd: getPythonPocPath(), env: pyEnv });
 
   const normalizedJsonPath = path.join(outDir, "normalized_contract.json");
   const excelPath = path.join(outDir, "extracted_contract.xlsx");

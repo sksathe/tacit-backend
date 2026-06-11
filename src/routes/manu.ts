@@ -9,6 +9,7 @@ import { buildManuRunFromInput, kickManuPipeline } from '../services/manuPipelin
 import {
   CreateManuRunSchema,
   PatchManuRunSchema,
+  ManuUploadedDocumentSchema,
   MANU_PROCESSING_STAGES,
   type ManuDocumentCategory,
   type ManuRun,
@@ -36,6 +37,7 @@ const TranslationQAGenerateSchema = z.object({
       required: z.boolean().optional(),
     }),
   ),
+  documents: z.array(ManuUploadedDocumentSchema).optional(),
 });
 
 async function assertProjectAccess(req: AuthenticatedRequest, _projectId: string): Promise<boolean> {
@@ -180,11 +182,12 @@ router.post('/translation-qa/generate', authMiddleware, async (req: Authenticate
       return;
     }
 
-    const { missionId, manualConfig, sections } = parsed.data;
+    const { missionId, manualConfig, sections, documents } = parsed.data;
     const { translationQA, model } = await buildTranslationQA({
       missionId,
       manualConfig: manualConfig as any,
       sections: sections as any,
+      documents: documents as any,
     });
 
     res.json({ ok: true, translationQA, model });
